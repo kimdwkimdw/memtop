@@ -52,6 +52,7 @@ pub struct ProcessSample {
     pub cmdline: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub exe: Option<PathBuf>,
+    pub container_id: Option<String>,
     pub memory_kib: u64,
     pub memory_source: MemoryMetric,
 }
@@ -168,6 +169,7 @@ fn read_process(pid: u32, metric: MemoryMetric, min_memory_kib: u64) -> Option<P
         cmdline: read_cmdline(&proc_dir.join("cmdline")),
         cwd: read_link(proc_dir.join("cwd")),
         exe: read_link(proc_dir.join("exe")),
+        container_id: read_container_id(&proc_dir.join("cgroup")),
         memory_kib,
         memory_source,
     })
@@ -209,6 +211,56 @@ fn read_link(path: PathBuf) -> Option<PathBuf> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(_) => None,
     }
+}
+
+fn read_container_id(path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(path).ok()?;
+    parse_container_id(&contents)
+}
+
+fn parse_container_id(contents: &str) -> Option<String> {
+    for line in contents.lines() {
+        let Some(path) = line.rsplit(':').next() else {
+            continue;
+        };
+        let components: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+
+        if let Some(id) = docker_path_container_id(&components) {
+            return Some(id.to_string());
+        }
+
+        if let Some(id) = scoped_container_id(&components) {
+            return Some(id.to_string());
+        }
+    }
+
+    None
+}
+
+fn docker_path_container_id<'a>(components: &'a [&str]) -> Option<&'a str> {
+    components.windows(2).find_map(|window| {
+        (window[0] == "docker" && is_container_id(window[1])).then_some(window[1])
+    })
+}
+
+fn scoped_container_id<'a>(components: &'a [&str]) -> Option<&'a str> {
+    components.iter().find_map(|component| {
+        extract_scoped_container_id(component, "docker-")
+            .or_else(|| extract_scoped_container_id(component, "cri-containerd-"))
+            .or_else(|| extract_scoped_container_id(component, "crio-"))
+            .or_else(|| extract_scoped_container_id(component, "libpod-"))
+    })
+}
+
+fn extract_scoped_container_id<'a>(component: &'a str, prefix: &str) -> Option<&'a str> {
+    let id = component
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(".scope"))?;
+    is_container_id(id).then_some(id)
+}
+
+fn is_container_id(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn read_smaps_rollup(path: &Path) -> Option<ProcessMemory> {
@@ -286,5 +338,29 @@ Private_Hugetlb:     512 kB
             uss_kib: None,
         };
         assert_eq!(memory.select(MemoryMetric::Pss), (8192, MemoryMetric::Rss));
+    }
+
+    #[test]
+    fn parses_docker_container_id_from_cgroup_path() {
+        let cgroup = "0::/../26f7c48a1dd0c9265b6b8929ba2f0237311d88bee6771f3c7799d77f7c3b45d3/docker/c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f\n";
+        assert_eq!(
+            parse_container_id(cgroup).as_deref(),
+            Some("c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f")
+        );
+    }
+
+    #[test]
+    fn parses_systemd_scoped_container_id_from_cgroup_path() {
+        let cgroup = "0::/system.slice/docker-c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f.scope\n";
+        assert_eq!(
+            parse_container_id(cgroup).as_deref(),
+            Some("c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f")
+        );
+    }
+
+    #[test]
+    fn ignores_unmarked_cgroup_hex_components() {
+        let cgroup = "0::/../f78869aa8bb617a13393a9ac532c68e4f1ed3a25f262bd8983bcaf1347654101\n";
+        assert_eq!(parse_container_id(cgroup), None);
     }
 }

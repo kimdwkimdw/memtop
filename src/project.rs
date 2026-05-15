@@ -77,6 +77,10 @@ pub fn build_projects(processes: Vec<ProcessSample>, min_memory_kib: u64) -> Vec
 }
 
 fn infer_project(process: &ProcessSample, home: Option<&Path>) -> ProjectKey {
+    if let Some(container_id) = process.container_id.as_deref() {
+        return container_key(container_id);
+    }
+
     if let Some(cwd) = process.cwd.as_deref()
         && let Some(key) = infer_from_path(cwd, home)
     {
@@ -89,18 +93,20 @@ fn infer_project(process: &ProcessSample, home: Option<&Path>) -> ProjectKey {
         }
     }
 
-    if let Some(exe) = process.exe.as_deref() {
-        if let Some(key) = infer_from_path(exe, home) {
-            return key;
-        }
-        if let Some(parent) = exe.parent()
-            && is_system_path(exe)
-        {
-            return ProjectKey {
-                name: "system".to_string(),
-                path: display_path(parent, home),
-            };
-        }
+    if let Some(exe) = process.exe.as_deref()
+        && let Some(key) = infer_from_path(exe, home)
+    {
+        return key;
+    }
+
+    if let Some(exe) = process.exe.as_deref()
+        && let Some(parent) = exe.parent()
+        && is_system_path(exe)
+    {
+        return ProjectKey {
+            name: "system".to_string(),
+            path: display_path(parent, home),
+        };
     }
 
     if process.name.starts_with('[') && process.name.ends_with(']') {
@@ -110,10 +116,7 @@ fn infer_project(process: &ProcessSample, home: Option<&Path>) -> ProjectKey {
         };
     }
 
-    ProjectKey {
-        name: "unknown".to_string(),
-        path: "no accessible cwd/exe".to_string(),
-    }
+    unknown_process_key(process)
 }
 
 fn infer_from_path(path: &Path, home: Option<&Path>) -> Option<ProjectKey> {
@@ -201,6 +204,30 @@ fn key_from_root(root: &Path, home: Option<&Path>) -> ProjectKey {
     }
 }
 
+fn container_key(container_id: &str) -> ProjectKey {
+    ProjectKey {
+        name: format!("container {}", short_container_id(container_id)),
+        path: format!("container {container_id}"),
+    }
+}
+
+fn short_container_id(container_id: &str) -> &str {
+    container_id.get(..12).unwrap_or(container_id)
+}
+
+fn unknown_process_key(process: &ProcessSample) -> ProjectKey {
+    let name = if process.name.is_empty() {
+        format!("process {}", process.pid)
+    } else {
+        format!("{} ({})", process.name, process.pid)
+    };
+
+    ProjectKey {
+        name,
+        path: "no accessible cwd/exe".to_string(),
+    }
+}
+
 fn command_line(process: &ProcessSample) -> String {
     if process.cmdline.is_empty() {
         process.name.clone()
@@ -282,6 +309,7 @@ mod tests {
                 cmdline: vec!["alpha".to_string()],
                 cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example")),
                 exe: None,
+                container_id: None,
                 memory_kib: 2048,
                 memory_source: crate::procfs::MemoryMetric::Pss,
             },
@@ -292,6 +320,7 @@ mod tests {
                 cmdline: vec!["beta".to_string()],
                 cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example/src")),
                 exe: None,
+                container_id: None,
                 memory_kib: 1024,
                 memory_source: crate::procfs::MemoryMetric::Pss,
             },
@@ -302,5 +331,109 @@ mod tests {
         assert_eq!(projects[0].name, "example");
         assert_eq!(projects[0].total_memory_kib, 3072);
         assert_eq!(projects[0].processes.len(), 2);
+    }
+
+    #[test]
+    fn does_not_group_processes_without_project_evidence() {
+        let processes = vec![
+            ProcessSample {
+                pid: 10,
+                ppid: 1,
+                name: "claude".to_string(),
+                cmdline: vec!["claude".to_string()],
+                cwd: None,
+                exe: None,
+                container_id: None,
+                memory_kib: 2048,
+                memory_source: crate::procfs::MemoryMetric::Pss,
+            },
+            ProcessSample {
+                pid: 11,
+                ppid: 1,
+                name: "claude".to_string(),
+                cmdline: vec!["claude".to_string()],
+                cwd: None,
+                exe: None,
+                container_id: None,
+                memory_kib: 1024,
+                memory_source: crate::procfs::MemoryMetric::Pss,
+            },
+        ];
+
+        let projects = build_projects(processes, 1);
+
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].name, "claude (10)");
+        assert_eq!(projects[0].processes.len(), 1);
+        assert_eq!(projects[0].processes[0].pid, 10);
+        assert_eq!(projects[1].name, "claude (11)");
+        assert_eq!(projects[1].processes.len(), 1);
+        assert_eq!(projects[1].processes[0].pid, 11);
+    }
+
+    #[test]
+    fn groups_processes_by_docker_container_when_project_is_unknown() {
+        let container_id =
+            "c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f".to_string();
+        let processes = vec![
+            ProcessSample {
+                pid: 10,
+                ppid: 1,
+                name: "tritonserver".to_string(),
+                cmdline: vec!["tritonserver".to_string()],
+                cwd: None,
+                exe: None,
+                container_id: Some(container_id.clone()),
+                memory_kib: 2048,
+                memory_source: crate::procfs::MemoryMetric::Pss,
+            },
+            ProcessSample {
+                pid: 11,
+                ppid: 10,
+                name: "triton_python_b".to_string(),
+                cmdline: vec![
+                    "/opt/tritonserver/backends/python/triton_python_backend_stub".to_string(),
+                    "/models2/melo-preprocessor/1/model.py".to_string(),
+                ],
+                cwd: None,
+                exe: None,
+                container_id: Some(container_id),
+                memory_kib: 1024,
+                memory_source: crate::procfs::MemoryMetric::Pss,
+            },
+        ];
+
+        let projects = build_projects(processes, 1);
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "container c6e70a0867a1");
+        assert_eq!(
+            projects[0].path,
+            "container c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f"
+        );
+        assert_eq!(projects[0].total_memory_kib, 3072);
+        assert_eq!(projects[0].processes.len(), 2);
+    }
+
+    #[test]
+    fn docker_container_takes_precedence_over_project_paths() {
+        let container_id =
+            "c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f".to_string();
+        let processes = vec![ProcessSample {
+            pid: 10,
+            ppid: 1,
+            name: "python".to_string(),
+            cmdline: vec!["python".to_string()],
+            cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example")),
+            exe: None,
+            container_id: Some(container_id),
+            memory_kib: 2048,
+            memory_source: crate::procfs::MemoryMetric::Pss,
+        }];
+
+        let projects = build_projects(processes, 1);
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "container c6e70a0867a1");
     }
 }
