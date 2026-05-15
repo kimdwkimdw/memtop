@@ -1,0 +1,19 @@
+{
+  "name": "memtop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "memtop": "./bin/memtop.mjs"
+  },
+  "scripts": {
+    "start": "node ./bin/memtop.mjs",
+    "dev": "node ./bin/memtop.mjs",
+    "treemap": "node ./bin/memtop.mjs",
+    "once": "node ./bin/memtop.mjs --once",
+    "build": "node ./bin/cargo.mjs build --release",
+    "check": "node ./bin/cargo.mjs check",
+    "test": "node ./bin/cargo.mjs test"
+  },
+  "packageManager": "pnpm@10.33.1"
+}
