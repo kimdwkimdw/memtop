@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "private": false,
   "description": "Treemap-based memory monitor for your terminal",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "memtop": "./dist/bin/memtop.js"
