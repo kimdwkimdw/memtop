@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">memtop - project-aware process memory</title>
+  <desc id="desc">A banner with folder-shaped project groups feeding into a treemap.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#172318"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="360" rx="36" fill="url(#bg)"/>
+  <g transform="translate(72 72)">
+    <path d="M26 56h118l28 32h166a28 28 0 0 1 28 28v90a28 28 0 0 1-28 28H26a28 28 0 0 1-28-28V84a28 28 0 0 1 28-28z" fill="#0b1220" stroke="#334155" stroke-width="4"/>
+    <rect x="32" y="108" width="142" height="88" rx="16" fill="#38bdf8"/>
+    <rect x="190" y="108" width="70" height="88" rx="16" fill="#34d399"/>
+    <rect x="276" y="108" width="58" height="88" rx="16" fill="#facc15"/>
+    <text x="42" y="162" fill="#06212a" font-family="Menlo, Consolas, monospace" font-size="23" font-weight="800">repo</text>
+  </g>
+  <g transform="translate(494 88)">
+    <text x="0" y="62" fill="#f8fafc" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="74" font-weight="850">memtop</text>
+    <text x="2" y="120" fill="#bbf7d0" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="32" font-weight="700">project-aware process memory</text>
+    <text x="4" y="174" fill="#cbd5e1" font-family="Menlo, Consolas, monospace" font-size="23">apps, repos, containers, workspaces</text>
+  </g>
+</svg>

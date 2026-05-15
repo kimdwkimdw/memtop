@@ -1,6 +1,10 @@
 # memtop
 
 <p align="center">
+  <img src="assets/title.svg" alt="memtop - project-aware process memory" width="780">
+</p>
+
+<p align="center">
   <strong>Project-aware process memory for your terminal.</strong><br>
   Memory grouped the way developers think: by app, repo, container, and workspace.
 </p>
@@ -20,6 +24,10 @@
   28.3 MiB         node .../codex
    6.8 MiB         target/debug/memtop --once
 ```
+
+<p align="center">
+  <img src="assets/sample.png" alt="memtop TUI screenshot showing a project memory treemap" width="900">
+</p>
 
 ## Install
 
