@@ -1,0 +1,311 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing tag to release, for example v0.0.1"
+        required: true
+        type: string
+      make_latest:
+        description: "Mark this GitHub Release as latest"
+        required: true
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
+
+concurrency:
+  group: release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      version: ${{ steps.validate.outputs.version }}
+      commit: ${{ steps.validate.outputs.commit }}
+      prerelease: ${{ steps.validate.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release tag
+        id: validate
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          tag="${RELEASE_TAG}"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag '${tag}' must look like v1.2.3 or v1.2.3-rc.1" >&2
+            exit 1
+          fi
+
+          git fetch --force --tags origin
+          if ! git rev-parse -q --verify "refs/tags/${tag}^{commit}" >/dev/null; then
+            echo "Tag '${tag}' does not exist in this repository" >&2
+            exit 1
+          fi
+
+          commit="$(git rev-parse "refs/tags/${tag}^{commit}")"
+          git checkout --detach "${commit}"
+
+          version="${tag#v}"
+          cargo_version="$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)".*/\1/')"
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "${version}" != "${cargo_version}" ]]; then
+            echo "Tag version ${version} does not match Cargo.toml version ${cargo_version}" >&2
+            exit 1
+          fi
+          if [[ "${version}" != "${package_version}" ]]; then
+            echo "Tag version ${version} does not match package.json version ${package_version}" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "${version}" == *-* ]]; then
+            prerelease=true
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "commit=${commit}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+
+  test:
+    name: Test release source
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Install package dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: pnpm run test
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs:
+      - validate
+      - test
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux MUSL tools
+        if: ${{ contains(matrix.target, 'linux-musl') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends musl-tools
+          linker_var="CARGO_TARGET_${{ matrix.target }}_LINKER"
+          linker_var="${linker_var^^}"
+          linker_var="${linker_var//-/_}"
+          echo "${linker_var}=musl-gcc" >> "${GITHUB_ENV}"
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --locked --release --target "${{ matrix.target }}"
+
+      - name: Package release archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/package-release.sh
+
+      - name: Smoke test archive
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          tar -C "${tmp}" -xzf "dist/${TARGET}/memtop-${TARGET}.tar.gz"
+          "${tmp}/memtop-${TARGET}" --version
+
+      - name: Smoke test Linux archive on Alpine
+        if: ${{ contains(matrix.target, 'linux-musl') }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          archive="$(pwd)/dist/${TARGET}/memtop-${TARGET}.tar.gz"
+          docker run --rm \
+            -v "${archive}:/tmp/memtop.tar.gz:ro" \
+            alpine:3.20 \
+            sh -c "mkdir -p /tmp/memtop && tar -xzf /tmp/memtop.tar.gz -C /tmp/memtop && /tmp/memtop/memtop-${TARGET} --version"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: memtop-${{ matrix.target }}
+          path: |
+            dist/${{ matrix.target }}/memtop-${{ matrix.target }}.tar.gz
+            dist/${{ matrix.target }}/memtop-${{ matrix.target }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Stage npm package with bundled binaries
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          targets=(
+            aarch64-apple-darwin
+            x86_64-apple-darwin
+            aarch64-unknown-linux-musl
+            x86_64-unknown-linux-musl
+          )
+
+          rm -rf vendor
+          for target in "${targets[@]}"; do
+            archive="release-assets/memtop-${target}/memtop-${target}.tar.gz"
+            if [[ ! -f "${archive}" ]]; then
+              echo "Missing archive ${archive}" >&2
+              exit 1
+            fi
+
+            tmp="$(mktemp -d)"
+            mkdir -p "vendor/${target}"
+            tar -C "${tmp}" -xzf "${archive}"
+            cp "${tmp}/memtop-${target}" "vendor/${target}/memtop"
+            chmod 0755 "vendor/${target}/memtop"
+          done
+
+          pnpm install --frozen-lockfile
+          pnpm run build:ts
+
+          mkdir -p release-assets/npm
+          npm pack --pack-destination release-assets/npm
+
+      - name: Smoke test npm global install
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$(mktemp -d)"
+          npm install -g --prefix "${prefix}" release-assets/npm/memtop-*.tgz
+          "${prefix}/bin/memtop" --version
+
+      - name: Write release notes
+        shell: bash
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/release-notes.md" <<EOF
+          memtop ${VERSION}
+
+          Source tag: ${TAG}
+          Source commit: ${COMMIT}
+
+          Prebuilt archives:
+          - memtop-aarch64-apple-darwin.tar.gz
+          - memtop-x86_64-apple-darwin.tar.gz
+          - memtop-aarch64-unknown-linux-musl.tar.gz
+          - memtop-x86_64-unknown-linux-musl.tar.gz
+          - memtop-${VERSION}.tgz
+
+          Linux archives are MUSL builds for broader distribution compatibility and are smoke-tested on Ubuntu runners and Alpine containers.
+
+          Install the npm tarball globally:
+
+          \`\`\`bash
+          npm install -g "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/memtop-${VERSION}.tgz"
+          memtop --version
+          \`\`\`
+          EOF
+          echo "RELEASE_NOTES=${RUNNER_TEMP}/release-notes.md" >> "${GITHUB_ENV}"
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          target_commitish: ${{ needs.validate.outputs.commit }}
+          name: ${{ needs.validate.outputs.version }}
+          body_path: ${{ env.RELEASE_NOTES }}
+          files: |
+            release-assets/**/*.tar.gz
+            release-assets/**/*.sha256
+            release-assets/npm/*.tgz
+          overwrite_files: true
+          make_latest: ${{ inputs.make_latest }}
+          prerelease: ${{ needs.validate.outputs.prerelease }}

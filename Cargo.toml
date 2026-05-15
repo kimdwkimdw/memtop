@@ -1,6 +1,6 @@
 [package]
 name = "memtop"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 
 [dependencies]
@@ -9,3 +9,4 @@ clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28"
 ratatui = "0.29"
 rayon = "1.10"
+sysinfo = "0.39.1"

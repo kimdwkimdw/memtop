@@ -9,7 +9,10 @@ use clap::Parser;
 
 use crate::{
     human::{format_kib, percent, truncate},
-    procfs::{MemoryMetric, collect_processes, normalize_scan_threads, read_meminfo},
+    procfs::{
+        MemoryMetric, collect_processes, effective_memory_metric, normalize_scan_threads,
+        read_meminfo,
+    },
     project::{ProjectNode, build_projects},
 };
 
@@ -17,7 +20,7 @@ use crate::{
 #[command(
     name = "memtop",
     version,
-    about = "Live project/process memory treemap for the current Linux machine"
+    about = "Live project/process memory treemap for Linux and macOS"
 )]
 pub struct Args {
     #[arg(
@@ -92,6 +95,7 @@ pub fn collect_snapshot(
     requested_metric: MemoryMetric,
     scan_threads: usize,
 ) -> Result<Snapshot> {
+    let metric = effective_memory_metric(metric);
     let meminfo = read_meminfo()?;
     let processes = collect_processes(metric, min_memory_kib, scan_threads)?;
     let fallback_process_count = processes
@@ -134,17 +138,24 @@ fn print_once(args: &Args) -> Result<()> {
     println!("memtop snapshot");
     println!(
         "process {} sum: {}, system used: {} ({:.1}% of total)",
-        args.metric.label(),
+        snapshot.metric.label(),
         format_kib(snapshot.observed_memory_kib),
         format_kib(used_kib),
         percent(used_kib, snapshot.mem_total_kib)
     );
+    if snapshot.metric != snapshot.requested_metric {
+        println!(
+            "{} is unavailable on this platform; using {} instead",
+            snapshot.requested_metric.label(),
+            snapshot.metric.label()
+        );
+    }
     println!(
         "{} projects, {} processes >= {} {}",
         snapshot.projects.len(),
         snapshot.filtered_process_count,
         format_kib(args.min_memory_kib),
-        args.metric.label()
+        snapshot.metric.label()
     );
     if snapshot.fallback_process_count > 0 {
         println!(
@@ -152,7 +163,7 @@ fn print_once(args: &Args) -> Result<()> {
             snapshot.fallback_process_count
         );
     }
-    if args.metric != MemoryMetric::Rss {
+    if snapshot.metric != MemoryMetric::Rss {
         println!(
             "smaps scan threads: {}",
             normalize_scan_threads(args.scan_threads)

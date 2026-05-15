@@ -1,11 +1,16 @@
 use std::{
-    fmt, fs, io,
+    fmt,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::ValueEnum;
-use rayon::{ThreadPoolBuilder, prelude::*};
+#[cfg(target_os = "linux")]
+use {
+    anyhow::Context,
+    rayon::{ThreadPoolBuilder, prelude::*},
+    std::{fs, io},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum MemoryMetric {
@@ -38,6 +43,14 @@ impl fmt::Display for MemoryMetric {
     }
 }
 
+pub fn effective_memory_metric(metric: MemoryMetric) -> MemoryMetric {
+    if cfg!(target_os = "linux") && Path::new("/proc/meminfo").exists() {
+        metric
+    } else {
+        MemoryMetric::Rss
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MemInfo {
     pub total_kib: u64,
@@ -57,6 +70,7 @@ pub struct ProcessSample {
     pub memory_source: MemoryMetric,
 }
 
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ProcessMemory {
     rss_kib: u64,
@@ -64,6 +78,7 @@ struct ProcessMemory {
     uss_kib: Option<u64>,
 }
 
+#[cfg(any(target_os = "linux", test))]
 impl ProcessMemory {
     fn select(&self, metric: MemoryMetric) -> (u64, MemoryMetric) {
         match metric {
@@ -80,8 +95,11 @@ impl ProcessMemory {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub fn read_meminfo() -> Result<MemInfo> {
-    let contents = fs::read_to_string("/proc/meminfo").context("failed to read /proc/meminfo")?;
+    let Ok(contents) = fs::read_to_string("/proc/meminfo") else {
+        return Ok(read_meminfo_sysinfo());
+    };
     let mut info = MemInfo::default();
 
     for line in contents.lines() {
@@ -95,6 +113,22 @@ pub fn read_meminfo() -> Result<MemInfo> {
     Ok(info)
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn read_meminfo() -> Result<MemInfo> {
+    Ok(read_meminfo_sysinfo())
+}
+
+fn read_meminfo_sysinfo() -> MemInfo {
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+
+    MemInfo {
+        total_kib: bytes_to_kib(system.total_memory()),
+        available_kib: bytes_to_kib(system.available_memory()),
+    }
+}
+
+#[cfg(target_os = "linux")]
 pub fn collect_processes(
     metric: MemoryMetric,
     min_memory_kib: u64,
@@ -102,7 +136,12 @@ pub fn collect_processes(
 ) -> Result<Vec<ProcessSample>> {
     let mut pids = Vec::new();
 
-    for entry in fs::read_dir("/proc").context("failed to read /proc")? {
+    let entries = match fs::read_dir("/proc") {
+        Ok(entries) => entries,
+        Err(_) => return Ok(collect_processes_sysinfo(min_memory_kib)),
+    };
+
+    for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
             Err(_) => continue,
@@ -136,6 +175,50 @@ pub fn collect_processes(
     Ok(processes)
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn collect_processes(
+    _metric: MemoryMetric,
+    min_memory_kib: u64,
+    _scan_threads: usize,
+) -> Result<Vec<ProcessSample>> {
+    Ok(collect_processes_sysinfo(min_memory_kib))
+}
+
+fn collect_processes_sysinfo(min_memory_kib: u64) -> Vec<ProcessSample> {
+    let mut system = sysinfo::System::new_all();
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    let mut processes: Vec<ProcessSample> = system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            let memory_kib = bytes_to_kib(process.memory());
+            if memory_kib < min_memory_kib {
+                return None;
+            }
+
+            Some(ProcessSample {
+                pid: pid.as_u32(),
+                ppid: process.parent().map(|pid| pid.as_u32()).unwrap_or(0),
+                name: process.name().to_string_lossy().into_owned(),
+                cmdline: process
+                    .cmd()
+                    .iter()
+                    .map(|argument| argument.to_string_lossy().into_owned())
+                    .collect(),
+                cwd: process.cwd().map(Path::to_path_buf),
+                exe: process.exe().map(Path::to_path_buf),
+                container_id: None,
+                memory_kib,
+                memory_source: MemoryMetric::Rss,
+            })
+        })
+        .collect();
+    processes.sort_by_key(|process| process.pid);
+
+    processes
+}
+
 pub fn normalize_scan_threads(scan_threads: usize) -> usize {
     if scan_threads == 0 {
         std::thread::available_parallelism()
@@ -146,6 +229,7 @@ pub fn normalize_scan_threads(scan_threads: usize) -> usize {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn read_process(pid: u32, metric: MemoryMetric, min_memory_kib: u64) -> Option<ProcessSample> {
     let proc_dir = Path::new("/proc").join(pid.to_string());
     let status = fs::read_to_string(proc_dir.join("status")).ok()?;
@@ -175,6 +259,7 @@ fn read_process(pid: u32, metric: MemoryMetric, min_memory_kib: u64) -> Option<P
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_status(status: &str) -> Option<(String, u32, u64)> {
     let mut name = None;
     let mut ppid = 0;
@@ -193,6 +278,7 @@ fn parse_status(status: &str) -> Option<(String, u32, u64)> {
     name.map(|name| (name, ppid, rss_kib))
 }
 
+#[cfg(target_os = "linux")]
 fn read_cmdline(path: &Path) -> Vec<String> {
     let Ok(bytes) = fs::read(path) else {
         return Vec::new();
@@ -205,6 +291,7 @@ fn read_cmdline(path: &Path) -> Vec<String> {
         .collect()
 }
 
+#[cfg(target_os = "linux")]
 fn read_link(path: PathBuf) -> Option<PathBuf> {
     match fs::read_link(path) {
         Ok(path) => Some(path),
@@ -213,11 +300,13 @@ fn read_link(path: PathBuf) -> Option<PathBuf> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn read_container_id(path: &Path) -> Option<String> {
     let contents = fs::read_to_string(path).ok()?;
     parse_container_id(&contents)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_container_id(contents: &str) -> Option<String> {
     for line in contents.lines() {
         let Some(path) = line.rsplit(':').next() else {
@@ -237,12 +326,14 @@ fn parse_container_id(contents: &str) -> Option<String> {
     None
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn docker_path_container_id<'a>(components: &'a [&str]) -> Option<&'a str> {
     components.windows(2).find_map(|window| {
         (window[0] == "docker" && is_container_id(window[1])).then_some(window[1])
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn scoped_container_id<'a>(components: &'a [&str]) -> Option<&'a str> {
     components.iter().find_map(|component| {
         extract_scoped_container_id(component, "docker-")
@@ -252,6 +343,7 @@ fn scoped_container_id<'a>(components: &'a [&str]) -> Option<&'a str> {
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn extract_scoped_container_id<'a>(component: &'a str, prefix: &str) -> Option<&'a str> {
     let id = component
         .strip_prefix(prefix)
@@ -259,15 +351,18 @@ fn extract_scoped_container_id<'a>(component: &'a str, prefix: &str) -> Option<&
     is_container_id(id).then_some(id)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn is_container_id(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+#[cfg(target_os = "linux")]
 fn read_smaps_rollup(path: &Path) -> Option<ProcessMemory> {
     let contents = fs::read_to_string(path).ok()?;
     Some(parse_smaps_rollup(&contents))
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_smaps_rollup(contents: &str) -> ProcessMemory {
     let mut memory = ProcessMemory::default();
     let mut private_kib = 0;
@@ -290,16 +385,22 @@ fn parse_smaps_rollup(contents: &str) -> ProcessMemory {
     memory
 }
 
+#[cfg(target_os = "linux")]
 fn parse_meminfo_value(line: &str, key: &str) -> Option<u64> {
     line.strip_prefix(key).map(parse_kib_value)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_kib_value(value: &str) -> u64 {
     value
         .split_whitespace()
         .next()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(0)
+}
+
+fn bytes_to_kib(bytes: u64) -> u64 {
+    bytes / 1024
 }
 
 #[cfg(test)]

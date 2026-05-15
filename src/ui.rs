@@ -433,10 +433,14 @@ fn header(state: &AppState) -> Paragraph<'_> {
         .mem_total_kib
         .saturating_sub(state.snapshot.mem_available_kib);
     let metric_note = if state.snapshot.metric != state.snapshot.requested_metric {
-        format!(
-            " preview, loading {}",
-            state.snapshot.requested_metric.label()
-        )
+        if state.is_refreshing() {
+            format!(
+                " preview, loading {}",
+                state.snapshot.requested_metric.label()
+            )
+        } else {
+            format!(" ({} unavailable)", state.snapshot.requested_metric.label())
+        }
     } else if state.is_refreshing() {
         format!(" refreshing {}", state.args.metric.label())
     } else {

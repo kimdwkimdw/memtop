@@ -1,60 +1,151 @@
-# memtop — a treemap-based memory monitor for your terminal
+# memtop
 
-Live TUI treemap for Linux process memory, grouped by inferred project and then by process.
+<p align="center">
+  <strong>Project-aware process memory for your terminal.</strong><br>
+  Memory grouped the way developers think: by app, repo, container, and workspace.
+</p>
 
-## Run
+<p align="center">
+  <a href="https://github.com/kimdwkimdw/memtop/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/kimdwkimdw/memtop?include_prereleases&style=flat-square"></a>
+  <img alt="Project aware" src="https://img.shields.io/badge/project-aware-34d399?style=flat-square">
+  <img alt="Treemap" src="https://img.shields.io/badge/view-treemap-38bdf8?style=flat-square">
+  <img alt="Terminal" src="https://img.shields.io/badge/terminal-native-facc15?style=flat-square">
+</p>
 
-```bash
-pnpm start
-bun run start
+`memtop` is a live TUI treemap for Linux and macOS process memory. Instead of showing a flat list of `node`, `python`, `cargo`, browser helpers, and worker processes, it groups memory by the project or app those processes belong to.
+
+```text
+224.2 MiB   2.1%  memtop  (~/dev/private/memtop)
+ 143.9 MiB         codex --yolo
+  28.3 MiB         node .../codex
+   6.8 MiB         target/debug/memtop --once
 ```
 
-For a non-interactive snapshot:
+## Install
+
+Install the release npm tarball globally, then run `memtop` from any shell:
 
 ```bash
-pnpm once
-bun run once
+npm install -g "https://github.com/kimdwkimdw/memtop/releases/download/v0.0.1/memtop-0.0.1.tgz"
+memtop
 ```
 
-Build the release binary:
+Check the installed command:
 
 ```bash
-pnpm build
+memtop --version
 ```
 
-After a release build, the package CLI wrapper runs `target/release/memtop` directly. Before that, it falls back to `cargo run`.
+The npm tarball bundles prebuilt native binaries for:
 
-## Controls
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+- `aarch64-unknown-linux-musl`
+- `x86_64-unknown-linux-musl`
 
-- `q` or `Esc`: quit
-- `r`: refresh now
-- Mouse left-click: select the project or process tile under the cursor
-- `Up`/`Down` or `k`/`j`: move selection
-- `Enter` or `z`: zoom into the selected project and show its process treemap
-- `Backspace` or `x`: zoom back out to the project treemap
+## Usage
 
-## Options
+Run the live treemap:
 
 ```bash
-memtop --help
-memtop --interval-ms 1000 --metric pss --min-memory-kib 4096 --scan-threads 4 --top-projects 30 --top-processes 10
+memtop
 ```
 
-Project detection uses common repository markers such as `.git`, `Cargo.toml`, `package.json`, `pyproject.toml`, `go.mod`, and `mise.toml`. If no marker is visible, paths under folders such as `prj`, `projects`, `repo`, or `workspaces` are grouped by the next path component.
-
-`--scan-threads` controls PSS/USS collection cost. The default `4` keeps CPU usage bounded. Use `--scan-threads 0` to use all available parallelism for faster exact snapshots at higher CPU and memory cost.
-
-Examples:
+Print a non-interactive snapshot:
 
 ```bash
-memtop --scan-threads 2      # lower CPU background PSS refresh
-memtop --scan-threads 0      # fastest PSS refresh, higher CPU and memory pressure
-memtop --metric rss          # fastest mode, but shared memory is double-counted
+memtop --once
 ```
+
+Useful filters:
+
+```bash
+memtop --top-projects 40
+memtop --top-processes 16
+memtop --min-memory-kib 8192
+memtop --interval-ms 1000
+```
+
+Choose a memory metric:
+
+```bash
+memtop --metric pss
+memtop --metric uss
+memtop --metric rss
+```
+
+## Why Grouping Matters
+
+Modern development stacks rarely run as one obvious process. A single project can appear as:
+
+- `node`
+- `cargo`
+- `python`
+- `rust-analyzer`
+- `tsserver`
+- `worker`
+- app bundle helper processes
+- container children
+
+`memtop` recovers that context before drawing the memory map, so you can see whether a repo, desktop app, browser, container, or worker group is responsible for memory growth.
+
+## How Grouping Works
+
+`memtop` inspects process working directories, command paths, executable paths, macOS app bundles, and container metadata.
+
+It recognizes project markers:
+
+```text
+.git
+Cargo.toml
+package.json
+pyproject.toml
+go.mod
+mise.toml
+```
+
+It also recognizes workspace-style paths:
+
+```text
+project
+projects
+repo
+repos
+src
+workspace
+workspaces
+```
+
+On macOS, processes from the same `/Applications/*.app`, `/System/Applications/*.app`, `/System/Library/CoreServices/*.app`, or `~/Applications/*.app` bundle are grouped together before repository fallback detection. That keeps apps such as Chrome and their helper processes under one app-level group.
+
+Container metadata takes precedence when a process is known to belong to a container.
+
+## Navigation
+
+| Input | Action |
+| --- | --- |
+| `Up`, `Down`, `k`, `j` | Move through projects or processes |
+| `Enter`, `z` | Zoom into the selected project |
+| `Backspace`, `x` | Return to the project view |
+| Mouse click | Select a project or process |
+| `r` | Refresh now |
+| `q`, `Esc` | Quit |
+
+## Memory Metrics
+
+On Linux, `pss` and `uss` come from `/proc/<pid>/smaps_rollup`.
+
+- `pss` is usually the best attribution view because it divides shared pages across sharers.
+- `rss` is fastest, but shared pages can be counted multiple times.
+- `uss` focuses on private resident memory.
+
+On macOS, the OS does not expose the same PSS/USS accounting through this CLI, so `memtop` uses RSS while preserving the same TUI and grouping behavior.
+
+`--scan-threads` controls Linux PSS/USS collection cost. The default `4` keeps CPU usage bounded. Use `--scan-threads 0` to use all available parallelism for faster exact snapshots at higher CPU and memory cost.
 
 ## Limitations
 
-The first TUI frame can show inflated memory. This is intentional: when the requested metric is `pss` or `uss`, memtop opens with a fast RSS preview, then replaces it with the slower `smaps_rollup` result in the background.
+On Linux, the first TUI frame can show inflated memory. This is intentional: when the requested metric is `pss` or `uss`, `memtop` opens with a fast RSS preview, then replaces it with the slower `smaps_rollup` result in the background.
 
 Example from a real host:
 
@@ -77,10 +168,49 @@ The header has two totals with different meanings:
 - `system used` comes from `/proc/meminfo` as `MemTotal - MemAvailable`. This is the kernel's host-wide memory pressure signal.
 - `process <metric> sum` is the sum of sampled processes above `--min-memory-kib`. It drives treemap tile sizes. It is an attribution view, so it will not exactly match `system used`.
 
-Metric examples:
+Reading Linux `smaps_rollup` is slower because the kernel must summarize memory mappings for each process. If `smaps_rollup` cannot be read, that process falls back to RSS.
 
-- `rss`: reads `VmRSS` from `/proc/<pid>/status`. It is fast. If four workers map the same 4 GiB model, RSS reports about `4 GiB x 4 = 16 GiB`.
-- `pss`: reads `Pss` from `/proc/<pid>/smaps_rollup`. It splits shared pages. The same 4 GiB model across four workers contributes about `1 GiB` to each worker, `4 GiB` total.
-- `uss`: sums `Private_Clean + Private_Dirty + Private_Hugetlb` from `smaps_rollup`. The shared 4 GiB model contributes `0 GiB`; only private pages remain.
+## Development
 
-Reading `smaps_rollup` is slower because the kernel must summarize memory mappings for each process. `--scan-threads 4` keeps CPU use bounded; `--scan-threads 0` uses all available parallelism. On the example host, `--scan-threads 0` used `64` scanner threads. If `smaps_rollup` cannot be read, that process falls back to RSS; the example PSS snapshot reported `119` RSS fallbacks.
+Run from source:
+
+```bash
+pnpm install
+pnpm start
+```
+
+Run a snapshot from source:
+
+```bash
+pnpm once
+```
+
+Build and test:
+
+```bash
+pnpm test
+pnpm build
+```
+
+The package launchers are TypeScript sources compiled into `dist/bin/*.js` before each package script runs. In a release npm package, the CLI wrapper runs the bundled `vendor/<target>/memtop` binary. From a source checkout, it uses `target/release/memtop` after a release build and falls back to `cargo run` before that.
+
+## Release
+
+GitHub Releases are built manually from an existing tag with the `release` workflow.
+
+```bash
+git tag -a v0.0.1 -m "Release v0.0.1"
+git push origin v0.0.1
+```
+
+Then run **Actions > release > Run workflow** and enter the tag, for example `v0.0.1`.
+
+The workflow publishes:
+
+- `memtop-aarch64-apple-darwin.tar.gz`
+- `memtop-x86_64-apple-darwin.tar.gz`
+- `memtop-aarch64-unknown-linux-musl.tar.gz`
+- `memtop-x86_64-unknown-linux-musl.tar.gz`
+- `memtop-0.0.1.tgz`
+
+Linux archives are MUSL builds for broader distro compatibility. They are smoke-tested on the Ubuntu build runner and inside an Alpine container before upload. The npm tarball is also smoke-tested with `npm install -g` before the GitHub Release is created.

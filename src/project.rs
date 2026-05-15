@@ -120,6 +120,9 @@ fn infer_project(process: &ProcessSample, home: Option<&Path>) -> ProjectKey {
 }
 
 fn infer_from_path(path: &Path, home: Option<&Path>) -> Option<ProjectKey> {
+    if let Some(root) = find_macos_app_bundle_root(path, home) {
+        return Some(key_from_app_bundle(&root, home));
+    }
     if let Some(root) = find_project_root(path) {
         return Some(key_from_root(&root, home));
     }
@@ -137,6 +140,32 @@ fn infer_from_path(path: &Path, home: Option<&Path>) -> Option<ProjectKey> {
         return Some(key_from_root(&root, home));
     }
     None
+}
+
+fn find_macos_app_bundle_root(path: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    let mut root = PathBuf::new();
+
+    for component in path.components() {
+        root.push(component.as_os_str());
+        let Some(name) = component.as_os_str().to_str() else {
+            continue;
+        };
+
+        if name.ends_with(".app") && is_applications_bundle_path(&root, home) {
+            return Some(root);
+        }
+    }
+
+    None
+}
+
+fn is_applications_bundle_path(path: &Path, home: Option<&Path>) -> bool {
+    path.starts_with("/Applications")
+        || path.starts_with("/System/Applications")
+        || path.starts_with("/System/Library/CoreServices")
+        || home
+            .map(|home| path.starts_with(home.join("Applications")))
+            .unwrap_or(false)
 }
 
 fn command_paths(process: &ProcessSample) -> impl Iterator<Item = PathBuf> + '_ {
@@ -196,6 +225,21 @@ fn key_from_root(root: &Path, home: Option<&Path>) -> ProjectKey {
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .unwrap_or("/")
+        .to_string();
+
+    ProjectKey {
+        name,
+        path: display_path(root, home),
+    }
+}
+
+fn key_from_app_bundle(root: &Path, home: Option<&Path>) -> ProjectKey {
+    let name = root
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .or_else(|| root.file_name().and_then(|name| name.to_str()))
+        .unwrap_or("app")
         .to_string();
 
     ProjectKey {
@@ -411,6 +455,47 @@ mod tests {
             projects[0].path,
             "container c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f"
         );
+        assert_eq!(projects[0].total_memory_kib, 3072);
+        assert_eq!(projects[0].processes.len(), 2);
+    }
+
+    #[test]
+    fn groups_processes_by_macos_app_bundle() {
+        let processes = vec![
+            ProcessSample {
+                pid: 10,
+                ppid: 1,
+                name: "Google Chrome".to_string(),
+                cmdline: vec![
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string(),
+                ],
+                cwd: None,
+                exe: None,
+                container_id: None,
+                memory_kib: 2048,
+                memory_source: crate::procfs::MemoryMetric::Rss,
+            },
+            ProcessSample {
+                pid: 11,
+                ppid: 10,
+                name: "Google Chrome Helper (Renderer)".to_string(),
+                cmdline: vec![
+                    "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/Current/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)"
+                        .to_string(),
+                ],
+                cwd: None,
+                exe: None,
+                container_id: None,
+                memory_kib: 1024,
+                memory_source: crate::procfs::MemoryMetric::Rss,
+            },
+        ];
+
+        let projects = build_projects(processes, 1);
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "Google Chrome");
+        assert_eq!(projects[0].path, "/Applications/Google Chrome.app");
         assert_eq!(projects[0].total_memory_kib, 3072);
         assert_eq!(projects[0].processes.len(), 2);
     }

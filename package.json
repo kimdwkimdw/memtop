@@ -1,19 +1,31 @@
 {
   "name": "memtop",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.0.1",
+  "private": false,
+  "description": "Treemap-based memory monitor for your terminal",
   "type": "module",
   "bin": {
-    "memtop": "./bin/memtop.mjs"
+    "memtop": "./dist/bin/memtop.js"
   },
+  "files": [
+    "dist/",
+    "vendor/",
+    "README.md"
+  ],
   "scripts": {
-    "start": "node ./bin/memtop.mjs",
-    "dev": "node ./bin/memtop.mjs",
-    "treemap": "node ./bin/memtop.mjs",
-    "once": "node ./bin/memtop.mjs --once",
-    "build": "node ./bin/cargo.mjs build --release",
-    "check": "node ./bin/cargo.mjs check",
-    "test": "node ./bin/cargo.mjs test"
+    "build:ts": "tsc -p tsconfig.json",
+    "prepack": "npm run build:ts",
+    "start": "pnpm run build:ts && node ./dist/bin/memtop.js",
+    "dev": "pnpm run build:ts && node ./dist/bin/memtop.js",
+    "treemap": "pnpm run build:ts && node ./dist/bin/memtop.js",
+    "once": "pnpm run build:ts && node ./dist/bin/memtop.js --once",
+    "build": "pnpm run build:ts && node ./dist/bin/cargo.js build --release",
+    "check": "pnpm run build:ts && node ./dist/bin/cargo.js check",
+    "test": "pnpm run build:ts && node ./dist/bin/cargo.js test"
   },
-  "packageManager": "pnpm@10.33.1"
+  "packageManager": "pnpm@10.33.1",
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "typescript": "^6.0.3"
+  }
 }
