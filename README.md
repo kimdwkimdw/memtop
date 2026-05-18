@@ -208,8 +208,7 @@ The package launchers are TypeScript sources compiled into `dist/bin/*.js` befor
 
 ## Release
 
-GitHub Releases are built manually from an existing tag with the `release` workflow.
-The workflow also publishes `@arthurkim/memtop` to npm, so the repository must have an `NPM_TOKEN` secret with publish access to that package.
+GitHub Releases are built from version tags. The release workflow also publishes `@arthurkim/memtop` to npm, so the repository must have an `NPM_TOKEN` secret with publish access to that package.
 
 ```bash
 VERSION="$(node -p "require('./package.json').version")"
@@ -217,7 +216,7 @@ git tag -a "v${VERSION}" -m "Release v${VERSION}"
 git push origin "v${VERSION}"
 ```
 
-Then run **Actions > release > Run workflow** and enter the tag you just pushed.
+Pushing the tag starts the `release` workflow automatically. To rerun a release, run **Actions > release > Run workflow** and enter the existing tag.
 
 The workflow publishes:
 

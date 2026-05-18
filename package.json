@@ -1,6 +1,6 @@
 {
   "name": "@arthurkim/memtop",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": false,
   "description": "Treemap-based memory monitor for your terminal",
   "license": "MIT",

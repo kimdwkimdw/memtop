@@ -1,6 +1,10 @@
 name: release
 
 on:
+  push:
+    tags:
+      - "v*"
+
   workflow_dispatch:
     inputs:
       release_tag:
@@ -17,7 +21,7 @@ on:
           - "true"
 
 concurrency:
-  group: release-${{ inputs.release_tag }}
+  group: release-${{ github.event.inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -42,7 +46,7 @@ jobs:
         id: validate
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -327,5 +331,5 @@ jobs:
             release-assets/**/*.sha256
             release-assets/npm/*.tgz
           overwrite_files: true
-          make_latest: ${{ inputs.make_latest }}
+          make_latest: ${{ github.event.inputs.make_latest || 'false' }}
           prerelease: ${{ needs.validate.outputs.prerelease }}
