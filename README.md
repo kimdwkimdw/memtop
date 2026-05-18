@@ -31,10 +31,10 @@
 
 ## Install
 
-Install the release npm tarball globally, then run `memtop` from any shell:
+Install from npm, then run `memtop` from any shell:
 
 ```bash
-npm install -g "https://github.com/kimdwkimdw/memtop/releases/download/v0.0.1/memtop-0.0.1.tgz"
+npm install -g @arthurkim/memtop
 memtop
 ```
 
@@ -72,6 +72,7 @@ memtop --top-projects 40
 memtop --top-processes 16
 memtop --min-memory-kib 8192
 memtop --interval-ms 1000
+memtop --group-by uid
 ```
 
 Choose a memory metric:
@@ -128,13 +129,16 @@ On macOS, processes from the same `/Applications/*.app`, `/System/Applications/*
 
 Container metadata takes precedence when a process is known to belong to a container.
 
+On Linux, `--group-by uid` groups processes by the real UID reported in `/proc/<pid>/status`. In the TUI, press `u` to toggle between project-aware grouping and UID grouping.
+
 ## Navigation
 
 | Input | Action |
 | --- | --- |
-| `Up`, `Down`, `k`, `j` | Move through projects or processes |
-| `Enter`, `z` | Zoom into the selected project |
-| `Backspace`, `x` | Return to the project view |
+| `Up`, `Down`, `k`, `j` | Move through groups or processes |
+| `Enter`, `z` | Zoom into the selected group |
+| `Backspace`, `x` | Return to the group view |
+| `u` | Toggle project/UID grouping |
 | Mouse click | Select a project or process |
 | `r` | Refresh now |
 | `q`, `Esc` | Quit |
@@ -205,13 +209,15 @@ The package launchers are TypeScript sources compiled into `dist/bin/*.js` befor
 ## Release
 
 GitHub Releases are built manually from an existing tag with the `release` workflow.
+The workflow also publishes `@arthurkim/memtop` to npm, so the repository must have an `NPM_TOKEN` secret with publish access to that package.
 
 ```bash
-git tag -a v0.0.1 -m "Release v0.0.1"
-git push origin v0.0.1
+VERSION="$(node -p "require('./package.json').version")"
+git tag -a "v${VERSION}" -m "Release v${VERSION}"
+git push origin "v${VERSION}"
 ```
 
-Then run **Actions > release > Run workflow** and enter the tag, for example `v0.0.1`.
+Then run **Actions > release > Run workflow** and enter the tag you just pushed.
 
 The workflow publishes:
 
@@ -219,6 +225,6 @@ The workflow publishes:
 - `memtop-x86_64-apple-darwin.tar.gz`
 - `memtop-aarch64-unknown-linux-musl.tar.gz`
 - `memtop-x86_64-unknown-linux-musl.tar.gz`
-- `memtop-0.0.1.tgz`
+- npm package `@arthurkim/memtop`
 
-Linux archives are MUSL builds for broader distro compatibility. They are smoke-tested on the Ubuntu build runner and inside an Alpine container before upload. The npm tarball is also smoke-tested with `npm install -g` before the GitHub Release is created.
+Linux archives are MUSL builds for broader distro compatibility. They are smoke-tested on the Ubuntu build runner and inside an Alpine container before upload. The npm package is also smoke-tested with `npm install -g` before it is published.

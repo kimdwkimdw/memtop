@@ -13,7 +13,7 @@ use crate::{
         MemoryMetric, collect_processes, effective_memory_metric, normalize_scan_threads,
         read_meminfo,
     },
-    project::{ProjectNode, build_projects},
+    project::{GroupMode, ProjectNode, build_projects},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -48,15 +48,23 @@ pub struct Args {
 
     #[arg(
         long,
+        value_enum,
+        default_value_t = GroupMode::Project,
+        help = "Group processes by project context or Linux uid"
+    )]
+    pub group_by: GroupMode,
+
+    #[arg(
+        long,
         default_value_t = 4,
         help = "Max concurrent smaps_rollup reads for PSS/USS; 0 uses all available parallelism"
     )]
     pub scan_threads: usize,
 
-    #[arg(long, default_value_t = 24, help = "Maximum project tiles to render")]
+    #[arg(long, default_value_t = 24, help = "Maximum group tiles to render")]
     pub top_projects: usize,
 
-    #[arg(long, default_value_t = 8, help = "Maximum process tiles per project")]
+    #[arg(long, default_value_t = 8, help = "Maximum process tiles per group")]
     pub top_processes: usize,
 
     #[arg(
@@ -70,6 +78,7 @@ pub struct Args {
 pub struct Snapshot {
     pub metric: MemoryMetric,
     pub requested_metric: MemoryMetric,
+    pub group_by: GroupMode,
     pub mem_total_kib: u64,
     pub mem_available_kib: u64,
     pub observed_memory_kib: u64,
@@ -93,16 +102,18 @@ pub fn collect_snapshot(
     min_memory_kib: u64,
     metric: MemoryMetric,
     requested_metric: MemoryMetric,
+    group_by: GroupMode,
     scan_threads: usize,
 ) -> Result<Snapshot> {
     let metric = effective_memory_metric(metric);
+    let group_by = group_by.effective();
     let meminfo = read_meminfo()?;
     let processes = collect_processes(metric, min_memory_kib, scan_threads)?;
     let fallback_process_count = processes
         .iter()
         .filter(|process| process.memory_kib >= min_memory_kib && process.memory_source != metric)
         .count();
-    let projects = build_projects(processes, min_memory_kib);
+    let projects = build_projects(processes, min_memory_kib, group_by);
     let observed_memory_kib = projects
         .iter()
         .map(|project| project.total_memory_kib)
@@ -115,6 +126,7 @@ pub fn collect_snapshot(
     Ok(Snapshot {
         metric,
         requested_metric,
+        group_by,
         mem_total_kib: meminfo.total_kib,
         mem_available_kib: meminfo.available_kib,
         observed_memory_kib,
@@ -129,6 +141,7 @@ fn print_once(args: &Args) -> Result<()> {
         args.min_memory_kib,
         args.metric,
         args.metric,
+        args.group_by,
         args.scan_threads,
     )?;
     let used_kib = snapshot
@@ -151,12 +164,14 @@ fn print_once(args: &Args) -> Result<()> {
         );
     }
     println!(
-        "{} projects, {} processes >= {} {}",
+        "{} {}, {} processes >= {} {}",
         snapshot.projects.len(),
+        snapshot.group_by.plural_label(),
         snapshot.filtered_process_count,
         format_kib(args.min_memory_kib),
         snapshot.metric.label()
     );
+    println!("grouping: {}", snapshot.group_by.label());
     if snapshot.fallback_process_count > 0 {
         println!(
             "{} processes fell back to RSS because smaps_rollup was unavailable",

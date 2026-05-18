@@ -2,10 +2,53 @@ use std::{
     collections::HashMap,
     env,
     ffi::OsStr,
+    fmt, fs,
     path::{Component, Path, PathBuf},
 };
 
+use clap::ValueEnum;
+
 use crate::procfs::ProcessSample;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GroupMode {
+    Project,
+    Uid,
+}
+
+impl GroupMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Uid => "uid",
+        }
+    }
+
+    pub fn plural_label(self) -> &'static str {
+        match self {
+            Self::Project => "projects",
+            Self::Uid => "UIDs",
+        }
+    }
+
+    pub fn effective(self) -> Self {
+        match self {
+            Self::Project => Self::Project,
+            Self::Uid if cfg!(target_os = "linux") => Self::Uid,
+            Self::Uid => Self::Project,
+        }
+    }
+
+    pub fn can_toggle_to_uid() -> bool {
+        cfg!(target_os = "linux")
+    }
+}
+
+impl fmt::Display for GroupMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ProjectNode {
@@ -30,8 +73,13 @@ struct ProjectKey {
     path: String,
 }
 
-pub fn build_projects(processes: Vec<ProcessSample>, min_memory_kib: u64) -> Vec<ProjectNode> {
+pub fn build_projects(
+    processes: Vec<ProcessSample>,
+    min_memory_kib: u64,
+    group_mode: GroupMode,
+) -> Vec<ProjectNode> {
     let home = home_dir();
+    let users = (group_mode == GroupMode::Uid).then(read_passwd_users);
     let mut projects: HashMap<ProjectKey, ProjectNode> = HashMap::new();
 
     for process in processes {
@@ -39,7 +87,10 @@ pub fn build_projects(processes: Vec<ProcessSample>, min_memory_kib: u64) -> Vec
             continue;
         }
 
-        let key = infer_project(&process, home.as_deref());
+        let key = match group_mode {
+            GroupMode::Project => infer_project(&process, home.as_deref()),
+            GroupMode::Uid => uid_key(&process, users.as_ref()),
+        };
         let process_node = ProcessNode {
             pid: process.pid,
             ppid: process.ppid,
@@ -74,6 +125,25 @@ pub fn build_projects(processes: Vec<ProcessSample>, min_memory_kib: u64) -> Vec
             .then(left.name.cmp(&right.name))
     });
     projects
+}
+
+fn uid_key(process: &ProcessSample, users: Option<&HashMap<u32, String>>) -> ProjectKey {
+    let Some(uid) = process.uid else {
+        return ProjectKey {
+            name: "uid unavailable".to_string(),
+            path: "uid unavailable".to_string(),
+        };
+    };
+
+    let name = users
+        .and_then(|users| users.get(&uid))
+        .map(|user| format!("{user} (uid {uid})"))
+        .unwrap_or_else(|| format!("uid {uid}"));
+
+    ProjectKey {
+        name,
+        path: format!("uid {uid}"),
+    }
 }
 
 fn infer_project(process: &ProcessSample, home: Option<&Path>) -> ProjectKey {
@@ -307,6 +377,25 @@ fn home_dir() -> Option<PathBuf> {
     env::var_os("HOME").map(PathBuf::from)
 }
 
+fn read_passwd_users() -> HashMap<u32, String> {
+    fs::read_to_string("/etc/passwd")
+        .map(|contents| parse_passwd_users(&contents))
+        .unwrap_or_default()
+}
+
+fn parse_passwd_users(contents: &str) -> HashMap<u32, String> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(':');
+            let name = fields.next()?;
+            fields.next()?;
+            let uid = fields.next()?.parse().ok()?;
+            Some((uid, name.to_string()))
+        })
+        .collect()
+}
+
 fn is_system_path(path: &Path) -> bool {
     [
         "/bin",
@@ -349,6 +438,7 @@ mod tests {
             ProcessSample {
                 pid: 10,
                 ppid: 1,
+                uid: None,
                 name: "alpha".to_string(),
                 cmdline: vec!["alpha".to_string()],
                 cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example")),
@@ -360,6 +450,7 @@ mod tests {
             ProcessSample {
                 pid: 11,
                 ppid: 1,
+                uid: None,
                 name: "beta".to_string(),
                 cmdline: vec!["beta".to_string()],
                 cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example/src")),
@@ -370,7 +461,7 @@ mod tests {
             },
         ];
 
-        let projects = build_projects(processes, 1);
+        let projects = build_projects(processes, 1, GroupMode::Project);
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "example");
         assert_eq!(projects[0].total_memory_kib, 3072);
@@ -383,6 +474,7 @@ mod tests {
             ProcessSample {
                 pid: 10,
                 ppid: 1,
+                uid: None,
                 name: "claude".to_string(),
                 cmdline: vec!["claude".to_string()],
                 cwd: None,
@@ -394,6 +486,7 @@ mod tests {
             ProcessSample {
                 pid: 11,
                 ppid: 1,
+                uid: None,
                 name: "claude".to_string(),
                 cmdline: vec!["claude".to_string()],
                 cwd: None,
@@ -404,7 +497,7 @@ mod tests {
             },
         ];
 
-        let projects = build_projects(processes, 1);
+        let projects = build_projects(processes, 1, GroupMode::Project);
 
         assert_eq!(projects.len(), 2);
         assert_eq!(projects[0].name, "claude (10)");
@@ -423,6 +516,7 @@ mod tests {
             ProcessSample {
                 pid: 10,
                 ppid: 1,
+                uid: None,
                 name: "tritonserver".to_string(),
                 cmdline: vec!["tritonserver".to_string()],
                 cwd: None,
@@ -434,6 +528,7 @@ mod tests {
             ProcessSample {
                 pid: 11,
                 ppid: 10,
+                uid: None,
                 name: "triton_python_b".to_string(),
                 cmdline: vec![
                     "/opt/tritonserver/backends/python/triton_python_backend_stub".to_string(),
@@ -447,7 +542,7 @@ mod tests {
             },
         ];
 
-        let projects = build_projects(processes, 1);
+        let projects = build_projects(processes, 1, GroupMode::Project);
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "container c6e70a0867a1");
@@ -465,6 +560,7 @@ mod tests {
             ProcessSample {
                 pid: 10,
                 ppid: 1,
+                uid: None,
                 name: "Google Chrome".to_string(),
                 cmdline: vec![
                     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".to_string(),
@@ -478,6 +574,7 @@ mod tests {
             ProcessSample {
                 pid: 11,
                 ppid: 10,
+                uid: None,
                 name: "Google Chrome Helper (Renderer)".to_string(),
                 cmdline: vec![
                     "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/Current/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)"
@@ -491,7 +588,7 @@ mod tests {
             },
         ];
 
-        let projects = build_projects(processes, 1);
+        let projects = build_projects(processes, 1, GroupMode::Project);
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "Google Chrome");
@@ -507,6 +604,7 @@ mod tests {
         let processes = vec![ProcessSample {
             pid: 10,
             ppid: 1,
+            uid: None,
             name: "python".to_string(),
             cmdline: vec!["python".to_string()],
             cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example")),
@@ -516,9 +614,58 @@ mod tests {
             memory_source: crate::procfs::MemoryMetric::Pss,
         }];
 
-        let projects = build_projects(processes, 1);
+        let projects = build_projects(processes, 1, GroupMode::Project);
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "container c6e70a0867a1");
+    }
+
+    #[test]
+    fn groups_processes_by_uid() {
+        let uid = u32::MAX;
+        let processes = vec![
+            ProcessSample {
+                pid: 10,
+                ppid: 1,
+                uid: Some(uid),
+                name: "alpha".to_string(),
+                cmdline: vec!["alpha".to_string()],
+                cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example-a")),
+                exe: None,
+                container_id: None,
+                memory_kib: 2048,
+                memory_source: crate::procfs::MemoryMetric::Pss,
+            },
+            ProcessSample {
+                pid: 11,
+                ppid: 1,
+                uid: Some(uid),
+                name: "beta".to_string(),
+                cmdline: vec!["beta".to_string()],
+                cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example-b")),
+                exe: None,
+                container_id: None,
+                memory_kib: 1024,
+                memory_source: crate::procfs::MemoryMetric::Pss,
+            },
+        ];
+
+        let projects = build_projects(processes, 1, GroupMode::Uid);
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "uid 4294967295");
+        assert_eq!(projects[0].path, "uid 4294967295");
+        assert_eq!(projects[0].total_memory_kib, 3072);
+        assert_eq!(projects[0].processes.len(), 2);
+    }
+
+    #[test]
+    fn parses_passwd_users() {
+        let users = parse_passwd_users(
+            "root:x:0:0:root:/root:/bin/sh\narthur:x:1000:1000::/home/arthur:/bin/zsh\n",
+        );
+
+        assert_eq!(users.get(&0).map(String::as_str), Some("root"));
+        assert_eq!(users.get(&1000).map(String::as_str), Some("arthur"));
     }
 }

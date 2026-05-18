@@ -31,7 +31,7 @@ use crate::{
     Args, Snapshot, collect_snapshot,
     human::{format_kib, percent, truncate},
     procfs::MemoryMetric,
-    project::{ProcessNode, ProjectNode},
+    project::{GroupMode, ProcessNode, ProjectNode},
     treemap::{self, Area},
 };
 
@@ -86,7 +86,8 @@ struct ProjectTileOptions {
 }
 
 impl AppState {
-    fn new(args: Args) -> Result<Self> {
+    fn new(mut args: Args) -> Result<Self> {
+        args.group_by = args.group_by.effective();
         let startup_metric = if args.metric == MemoryMetric::Rss {
             args.metric
         } else {
@@ -96,6 +97,7 @@ impl AppState {
             args.min_memory_kib,
             startup_metric,
             args.metric,
+            args.group_by,
             args.scan_threads,
         )?;
         let mut state = Self {
@@ -123,6 +125,21 @@ impl AppState {
         self.start_refresh();
     }
 
+    fn toggle_uid_grouping(&mut self) {
+        if self.pending_refresh.is_some() || !GroupMode::can_toggle_to_uid() {
+            return;
+        }
+
+        self.args.group_by = match self.args.group_by {
+            GroupMode::Project => GroupMode::Uid,
+            GroupMode::Uid => GroupMode::Project,
+        };
+        self.zoomed_project = None;
+        self.selected_project = 0;
+        self.selected_process = 0;
+        self.start_refresh();
+    }
+
     fn start_refresh(&mut self) {
         if self.pending_refresh.is_some() {
             return;
@@ -130,10 +147,11 @@ impl AppState {
 
         let min_memory_kib = self.args.min_memory_kib;
         let metric = self.args.metric;
+        let group_by = self.args.group_by;
         let scan_threads = self.args.scan_threads;
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
-            let result = collect_snapshot(min_memory_kib, metric, metric, scan_threads)
+            let result = collect_snapshot(min_memory_kib, metric, metric, group_by, scan_threads)
                 .map_err(|error| error.to_string());
             let _ = sender.send(result);
         });
@@ -347,6 +365,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, args: Args) -> Re
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Char('r') => state.refresh(),
+                    KeyCode::Char('u') => state.toggle_uid_grouping(),
                     KeyCode::Enter | KeyCode::Char('z') => state.zoom_in(),
                     KeyCode::Backspace | KeyCode::Char('x') => state.zoom_out(),
                     KeyCode::Down | KeyCode::Char('j') => state.select_next(),
@@ -470,16 +489,18 @@ fn header(state: &AppState) -> Paragraph<'_> {
             )),
         ]),
         Line::raw(format!(
-            "{} projects  {} processes >= {} {}  refresh {}ms  mode {}{}",
+            "{} {}  {} processes >= {} {}  refresh {}ms  group {}  mode {}{}",
             state.snapshot.projects.len(),
+            state.snapshot.group_by.plural_label(),
             state.snapshot.filtered_process_count,
             format_kib(state.args.min_memory_kib),
             state.snapshot.metric.label(),
             state.args.interval_ms,
+            state.snapshot.group_by.label(),
             if state.is_zoomed() {
-                "project zoom"
+                "group zoom"
             } else {
-                "projects"
+                "groups"
             },
             fallback
         )),
@@ -508,7 +529,7 @@ fn details(state: &AppState) -> Paragraph<'_> {
         )));
 
         if state.is_zoomed() {
-            lines.push(Line::raw("zoomed into project processes"));
+            lines.push(Line::raw("zoomed into group processes"));
         }
         lines.push(Line::raw(""));
 
@@ -566,9 +587,14 @@ fn footer(state: &AppState) -> Paragraph<'_> {
         .as_ref()
         .map(|error| format!("  last error: {error}"))
         .unwrap_or_default();
+    let group_toggle = if GroupMode::can_toggle_to_uid() {
+        "  u group uid/project"
+    } else {
+        ""
+    };
     Paragraph::new(Line::raw(format!(
-        "q quit  click select  up/down move  Enter/z zoom in  Backspace/x zoom out  r refresh  top {} projects / {} processes{}",
-        state.args.top_projects, state.args.top_processes, error
+        "q quit  click select  up/down move  Enter/z zoom in  Backspace/x zoom out{}  r refresh  top {} groups / {} processes{}",
+        group_toggle, state.args.top_projects, state.args.top_processes, error
     )))
     .block(Block::default().borders(Borders::TOP))
 }
@@ -1035,11 +1061,13 @@ mod tests {
                 scan_threads: 4,
                 top_projects: 24,
                 top_processes,
+                group_by: GroupMode::Project,
                 once: false,
             },
             snapshot: Snapshot {
                 metric: MemoryMetric::Pss,
                 requested_metric: MemoryMetric::Pss,
+                group_by: GroupMode::Project,
                 mem_total_kib: 100,
                 mem_available_kib: 50,
                 observed_memory_kib: 100,

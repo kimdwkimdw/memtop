@@ -61,6 +61,7 @@ pub struct MemInfo {
 pub struct ProcessSample {
     pub pid: u32,
     pub ppid: u32,
+    pub uid: Option<u32>,
     pub name: String,
     pub cmdline: Vec<String>,
     pub cwd: Option<PathBuf>,
@@ -200,6 +201,7 @@ fn collect_processes_sysinfo(min_memory_kib: u64) -> Vec<ProcessSample> {
             Some(ProcessSample {
                 pid: pid.as_u32(),
                 ppid: process.parent().map(|pid| pid.as_u32()).unwrap_or(0),
+                uid: None,
                 name: process.name().to_string_lossy().into_owned(),
                 cmdline: process
                     .cmd()
@@ -233,7 +235,7 @@ pub fn normalize_scan_threads(scan_threads: usize) -> usize {
 fn read_process(pid: u32, metric: MemoryMetric, min_memory_kib: u64) -> Option<ProcessSample> {
     let proc_dir = Path::new("/proc").join(pid.to_string());
     let status = fs::read_to_string(proc_dir.join("status")).ok()?;
-    let (name, ppid, rss_kib) = parse_status(&status)?;
+    let (name, ppid, uid, rss_kib) = parse_status(&status)?;
     if rss_kib < min_memory_kib {
         return None;
     }
@@ -249,6 +251,7 @@ fn read_process(pid: u32, metric: MemoryMetric, min_memory_kib: u64) -> Option<P
     Some(ProcessSample {
         pid,
         ppid,
+        uid,
         name,
         cmdline: read_cmdline(&proc_dir.join("cmdline")),
         cwd: read_link(proc_dir.join("cwd")),
@@ -260,9 +263,10 @@ fn read_process(pid: u32, metric: MemoryMetric, min_memory_kib: u64) -> Option<P
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn parse_status(status: &str) -> Option<(String, u32, u64)> {
+fn parse_status(status: &str) -> Option<(String, u32, Option<u32>, u64)> {
     let mut name = None;
     let mut ppid = 0;
+    let mut uid = None;
     let mut rss_kib = 0;
 
     for line in status.lines() {
@@ -270,12 +274,17 @@ fn parse_status(status: &str) -> Option<(String, u32, u64)> {
             name = Some(value.trim().to_string());
         } else if let Some(value) = line.strip_prefix("PPid:") {
             ppid = value.trim().parse().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("Uid:") {
+            uid = value
+                .split_whitespace()
+                .next()
+                .and_then(|value| value.parse().ok());
         } else if let Some(value) = line.strip_prefix("VmRSS:") {
             rss_kib = parse_kib_value(value);
         }
     }
 
-    name.map(|name| (name, ppid, rss_kib))
+    name.map(|name| (name, ppid, uid, rss_kib))
 }
 
 #[cfg(target_os = "linux")]
@@ -409,10 +418,11 @@ mod tests {
 
     #[test]
     fn parses_status_fields() {
-        let status = "Name:\ttest-proc\nPPid:\t42\nVmRSS:\t2048 kB\n";
-        let (name, ppid, rss_kib) = parse_status(status).unwrap();
+        let status = "Name:\ttest-proc\nPPid:\t42\nUid:\t1000\t1000\t1000\t1000\nVmRSS:\t2048 kB\n";
+        let (name, ppid, uid, rss_kib) = parse_status(status).unwrap();
         assert_eq!(name, "test-proc");
         assert_eq!(ppid, 42);
+        assert_eq!(uid, Some(1000));
         assert_eq!(rss_kib, 2048);
     }
 

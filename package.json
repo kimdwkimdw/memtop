@@ -1,18 +1,21 @@
 {
-  "name": "memtop",
-  "version": "0.0.1",
+  "name": "@arthurkim/memtop",
+  "version": "0.0.2",
   "private": false,
   "description": "Treemap-based memory monitor for your terminal",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "memtop": "./dist/bin/memtop.js"
+    "memtop": "dist/bin/memtop.js"
   },
   "files": [
     "dist/",
     "vendor/",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build:ts": "tsc -p tsconfig.json",
     "prepack": "npm run build:ts",
@@ -28,5 +31,21 @@
   "devDependencies": {
     "@types/node": "^25.8.0",
     "typescript": "^6.0.3"
-  }
+  },
+  "main": "dist/bin/memtop.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kimdwkimdw/memtop.git"
+  },
+  "keywords": [
+    "memory",
+    "top",
+    "htop",
+    "monitor"
+  ],
+  "author": "Arthur Kim",
+  "bugs": {
+    "url": "https://github.com/kimdwkimdw/memtop/issues"
+  },
+  "homepage": "https://github.com/kimdwkimdw/memtop#readme"
 }
