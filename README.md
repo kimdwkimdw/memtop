@@ -25,9 +25,7 @@
    6.8 MiB         target/debug/memtop --once
 ```
 
-<p align="center">
-  <img src="assets/sample.png" alt="memtop TUI screenshot showing a project memory treemap" width="900">
-</p>
+![memtop demo](assets/demo.gif)
 
 ## Install
 
