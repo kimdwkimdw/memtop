@@ -1,0 +1,53 @@
+#!/bin/sh
+
+script=$0
+while [ -L "$script" ]; do
+  link=$(readlink "$script") || break
+  case "$link" in
+    /*) script=$link ;;
+    *)
+      script_dir=${script%/*}
+      script=${script_dir}/${link}
+      ;;
+  esac
+done
+
+case "$script" in
+  */*) script_dir=${script%/*} ;;
+  *)
+    resolved=$(command -v "$script" 2>/dev/null || true)
+    case "$resolved" in
+      */*) script_dir=${resolved%/*} ;;
+      *) script_dir=. ;;
+    esac
+    ;;
+esac
+
+root=$(CDPATH= cd "$script_dir/.." && pwd) || {
+  echo "memtop: failed to locate package root" >&2
+  exit 127
+}
+
+os=$(uname -s 2>/dev/null || echo unknown)
+arch=$(uname -m 2>/dev/null || echo unknown)
+
+case "$os:$arch" in
+  Darwin:arm64) target=aarch64-apple-darwin ;;
+  Darwin:x86_64) target=x86_64-apple-darwin ;;
+  Linux:aarch64 | Linux:arm64) target=aarch64-unknown-linux-musl ;;
+  Linux:x86_64 | Linux:amd64) target=x86_64-unknown-linux-musl ;;
+  *)
+    echo "memtop: unsupported platform ${os}/${arch}" >&2
+    echo "memtop: supported platforms are Linux/macOS on x86_64/aarch64" >&2
+    exit 1
+    ;;
+esac
+
+binary=${root}/vendor/${target}/memtop
+if [ ! -x "$binary" ]; then
+  echo "memtop: bundled binary not found at ${binary}" >&2
+  echo "memtop: reinstall @arthurkim/memtop or install a release for ${target}" >&2
+  exit 127
+fi
+
+exec "$binary" "$@"

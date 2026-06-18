@@ -29,10 +29,12 @@
 
 ## Install
 
-Install from npm, then run `memtop` from any shell:
+Install from npm or pnpm, then run `memtop` from any shell:
 
 ```bash
 npm install -g @arthurkim/memtop
+# or
+pnpm install -g @arthurkim/memtop
 memtop
 ```
 
@@ -48,6 +50,9 @@ The npm tarball bundles prebuilt native binaries for:
 - `x86_64-apple-darwin`
 - `aarch64-unknown-linux-musl`
 - `x86_64-unknown-linux-musl`
+
+The installed command is a POSIX shell launcher that execs the bundled native
+binary, so `node` is not required at runtime after installation.
 
 ## Usage
 
@@ -185,24 +190,26 @@ Reading Linux `smaps_rollup` is slower because the kernel must summarize memory 
 Run from source:
 
 ```bash
-pnpm install
-pnpm start
+cargo run
 ```
 
 Run a snapshot from source:
 
 ```bash
-pnpm once
+cargo run -- --once
 ```
 
-Build and test:
+You can also use the package scripts as Cargo aliases:
 
 ```bash
 pnpm test
 pnpm build
 ```
 
-The package launchers are TypeScript sources compiled into `dist/bin/*.js` before each package script runs. In a release npm package, the CLI wrapper runs the bundled `vendor/<target>/memtop` binary. From a source checkout, it uses `target/release/memtop` after a release build and falls back to `cargo run` before that.
+The npm package exposes `bin/memtop`, a POSIX shell launcher that chooses the
+bundled `vendor/<target>/memtop` binary for the current Linux or macOS platform.
+Source checkouts run through Cargo directly; release packages do not depend on
+Node.js to start `memtop`.
 
 ## Release
 
@@ -224,4 +231,4 @@ The workflow publishes:
 - `memtop-x86_64-unknown-linux-musl.tar.gz`
 - npm package `@arthurkim/memtop`
 
-Linux archives are MUSL builds for broader distro compatibility. They are smoke-tested on the Ubuntu build runner and inside an Alpine container before upload. The npm package is also smoke-tested with `npm install -g` before it is published.
+Linux archives are MUSL builds for broader distro compatibility. They are smoke-tested on the Ubuntu build runner and inside an Alpine container before upload. The npm package is also smoke-tested with `npm install -g` and `pnpm install -g` before it is published, with `node` blocked from the runtime `PATH`.

@@ -254,8 +254,7 @@ jobs:
             chmod 0755 "vendor/${target}/memtop"
           done
 
-          pnpm install --frozen-lockfile
-          pnpm run build:ts
+          bash scripts/test-npm-launcher.sh
 
           mkdir -p release-assets/npm
           npm pack --pack-destination release-assets/npm
@@ -264,9 +263,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tarballs=(release-assets/npm/*.tgz)
+          tarball="${tarballs[0]}"
           prefix="$(mktemp -d)"
-          npm install -g --prefix "${prefix}" release-assets/npm/*.tgz
-          "${prefix}/bin/memtop" --version
+          node_blocker="$(mktemp -d)"
+          printf '#!/bin/sh\necho "node must not be required to run memtop" >&2\nexit 99\n' > "${node_blocker}/node"
+          chmod 0755 "${node_blocker}/node"
+
+          npm install -g --prefix "${prefix}" "${tarball}"
+          PATH="${node_blocker}:/usr/bin:/bin" "${prefix}/bin/memtop" --version
+
+      - name: Smoke test pnpm global install
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarballs=(release-assets/npm/*.tgz)
+          tarball="${tarballs[0]}"
+          export PNPM_HOME
+          PNPM_HOME="$(mktemp -d)"
+          export PATH="${PNPM_HOME}:${PATH}"
+          node_blocker="$(mktemp -d)"
+          printf '#!/bin/sh\necho "node must not be required to run memtop" >&2\nexit 99\n' > "${node_blocker}/node"
+          chmod 0755 "${node_blocker}/node"
+
+          pnpm install -g "${tarball}"
+          global_bin="$(pnpm bin -g)"
+          PATH="${node_blocker}:/usr/bin:/bin" "${global_bin}/memtop" --version
 
       - name: Publish npm package
         shell: bash
@@ -310,10 +332,12 @@ jobs:
 
           Linux archives are MUSL builds for broader distribution compatibility and are smoke-tested on Ubuntu runners and Alpine containers.
 
-          Install from npm:
+          Install from npm or pnpm:
 
           \`\`\`bash
           npm install -g @arthurkim/memtop
+          # or
+          pnpm install -g @arthurkim/memtop
           memtop --version
           \`\`\`
           EOF

@@ -1,38 +1,32 @@
 {
   "name": "@arthurkim/memtop",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": false,
   "description": "Treemap-based memory monitor for your terminal",
   "license": "MIT",
-  "type": "module",
   "bin": {
-    "memtop": "dist/bin/memtop.js"
+    "memtop": "bin/memtop"
   },
   "files": [
-    "dist/",
+    "bin/memtop",
     "vendor/",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build:ts": "tsc -p tsconfig.json",
-    "prepack": "npm run build:ts",
-    "start": "pnpm run build:ts && node ./dist/bin/memtop.js",
-    "dev": "pnpm run build:ts && node ./dist/bin/memtop.js",
-    "treemap": "pnpm run build:ts && node ./dist/bin/memtop.js",
-    "once": "pnpm run build:ts && node ./dist/bin/memtop.js --once",
-    "build": "pnpm run build:ts && node ./dist/bin/cargo.js build --release",
-    "check": "pnpm run build:ts && node ./dist/bin/cargo.js check",
-    "test": "pnpm run build:ts && node ./dist/bin/cargo.js test"
+    "start": "scripts/cargo.sh run --quiet --",
+    "dev": "scripts/cargo.sh run --quiet --",
+    "treemap": "scripts/cargo.sh run --quiet --",
+    "once": "scripts/cargo.sh run --quiet -- --once",
+    "build": "scripts/cargo.sh build --release",
+    "check": "scripts/cargo.sh check --locked",
+    "test:launcher": "bash scripts/test-npm-launcher.sh",
+    "test": "scripts/cargo.sh test --locked && bash scripts/test-npm-launcher.sh"
   },
   "packageManager": "pnpm@10.33.1",
-  "devDependencies": {
-    "@types/node": "^25.8.0",
-    "typescript": "^6.0.3"
-  },
-  "main": "dist/bin/memtop.js",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kimdwkimdw/memtop.git"
