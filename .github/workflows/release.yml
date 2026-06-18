@@ -11,14 +11,6 @@ on:
         description: "Existing tag to release, for example v1.2.3"
         required: true
         type: string
-      make_latest:
-        description: "Mark this GitHub Release as latest"
-        required: true
-        type: choice
-        default: "false"
-        options:
-          - "false"
-          - "true"
 
 concurrency:
   group: release-${{ github.event.inputs.release_tag || github.ref_name }}
@@ -355,5 +347,5 @@ jobs:
             release-assets/**/*.sha256
             release-assets/npm/*.tgz
           overwrite_files: true
-          make_latest: ${{ github.event.inputs.make_latest || 'false' }}
+          make_latest: true
           prerelease: ${{ needs.validate.outputs.prerelease }}
