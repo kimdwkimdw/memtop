@@ -264,7 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           tarballs=(release-assets/npm/*.tgz)
-          tarball="${tarballs[0]}"
+          tarball="$(pwd)/${tarballs[0]}"
           prefix="$(mktemp -d)"
           node_blocker="$(mktemp -d)"
           printf '#!/bin/sh\necho "node must not be required to run memtop" >&2\nexit 99\n' > "${node_blocker}/node"
@@ -278,7 +278,7 @@ jobs:
         run: |
           set -euo pipefail
           tarballs=(release-assets/npm/*.tgz)
-          tarball="${tarballs[0]}"
+          tarball="$(pwd)/${tarballs[0]}"
           export PNPM_HOME
           PNPM_HOME="$(mktemp -d)"
           export PATH="${PNPM_HOME}:${PATH}"
