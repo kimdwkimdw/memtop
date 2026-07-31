@@ -508,8 +508,11 @@ mod tests {
 
     #[test]
     fn finds_named_workspace_root() {
-        let root = find_named_workspace_root(Path::new("/nfs/home/arthur/prj/memtop/src"));
-        assert_eq!(root.unwrap(), PathBuf::from("/nfs/home/arthur/prj/memtop"));
+        let root = find_named_workspace_root(Path::new("/nfs/home/testuser/prj/memtop/src"));
+        assert_eq!(
+            root.unwrap(),
+            PathBuf::from("/nfs/home/testuser/prj/memtop")
+        );
     }
 
     #[test]
@@ -521,7 +524,7 @@ mod tests {
                 uid: None,
                 name: "alpha".to_string(),
                 cmdline: vec!["alpha".to_string()],
-                cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example")),
+                cwd: Some(PathBuf::from("/nfs/home/testuser/prj/example")),
                 exe: None,
                 container_id: None,
                 memory_kib: 2048,
@@ -533,7 +536,7 @@ mod tests {
                 uid: None,
                 name: "beta".to_string(),
                 cmdline: vec!["beta".to_string()],
-                cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example/src")),
+                cwd: Some(PathBuf::from("/nfs/home/testuser/prj/example/src")),
                 exe: None,
                 container_id: None,
                 memory_kib: 1024,
@@ -712,7 +715,7 @@ mod tests {
             uid: None,
             name: "python".to_string(),
             cmdline: vec!["python".to_string()],
-            cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example")),
+            cwd: Some(PathBuf::from("/nfs/home/testuser/prj/example")),
             exe: None,
             container_id: Some(container_id),
             memory_kib: 2048,
@@ -735,7 +738,7 @@ mod tests {
                 uid: Some(uid),
                 name: "alpha".to_string(),
                 cmdline: vec!["alpha".to_string()],
-                cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example-a")),
+                cwd: Some(PathBuf::from("/nfs/home/testuser/prj/example-a")),
                 exe: None,
                 container_id: None,
                 memory_kib: 2048,
@@ -747,7 +750,7 @@ mod tests {
                 uid: Some(uid),
                 name: "beta".to_string(),
                 cmdline: vec!["beta".to_string()],
-                cwd: Some(PathBuf::from("/nfs/home/arthur/prj/example-b")),
+                cwd: Some(PathBuf::from("/nfs/home/testuser/prj/example-b")),
                 exe: None,
                 container_id: None,
                 memory_kib: 1024,
@@ -767,10 +770,10 @@ mod tests {
     #[test]
     fn parses_passwd_users() {
         let users = parse_passwd_users(
-            "root:x:0:0:root:/root:/bin/sh\narthur:x:1000:1000::/home/arthur:/bin/zsh\n",
+            "root:x:0:0:root:/root:/bin/sh\ntestuser:x:1000:1000::/home/testuser:/bin/zsh\n",
         );
 
         assert_eq!(users.get(&0).map(String::as_str), Some("root"));
-        assert_eq!(users.get(&1000).map(String::as_str), Some("arthur"));
+        assert_eq!(users.get(&1000).map(String::as_str), Some("testuser"));
     }
 }
