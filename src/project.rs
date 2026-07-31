@@ -1,9 +1,10 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     ffi::OsStr,
     fmt, fs,
     path::{Component, Path, PathBuf},
+    process::Command,
 };
 
 use clap::ValueEnum;
@@ -73,13 +74,28 @@ struct ProjectKey {
     path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DockerMetadata {
+    name: String,
+    launcher_uid: Option<u32>,
+}
+
 pub fn build_projects(
     processes: Vec<ProcessSample>,
     min_memory_kib: u64,
     group_mode: GroupMode,
 ) -> Vec<ProjectNode> {
     let home = home_dir();
-    let users = (group_mode == GroupMode::Uid).then(read_passwd_users);
+    let docker = if group_mode == GroupMode::Project {
+        read_docker_metadata(&processes)
+    } else {
+        HashMap::new()
+    };
+    let users = (group_mode == GroupMode::Uid
+        || docker
+            .values()
+            .any(|metadata| metadata.launcher_uid.is_some()))
+    .then(read_passwd_users);
     let mut projects: HashMap<ProjectKey, ProjectNode> = HashMap::new();
 
     for process in processes {
@@ -88,7 +104,7 @@ pub fn build_projects(
         }
 
         let key = match group_mode {
-            GroupMode::Project => infer_project(&process, home.as_deref()),
+            GroupMode::Project => infer_project(&process, home.as_deref(), &docker, users.as_ref()),
             GroupMode::Uid => uid_key(&process, users.as_ref()),
         };
         let process_node = ProcessNode {
@@ -135,20 +151,27 @@ fn uid_key(process: &ProcessSample, users: Option<&HashMap<u32, String>>) -> Pro
         };
     };
 
-    let name = users
-        .and_then(|users| users.get(&uid))
-        .map(|user| format!("{user} (uid {uid})"))
-        .unwrap_or_else(|| format!("uid {uid}"));
-
     ProjectKey {
-        name,
+        name: format_uid(uid, users),
         path: format!("uid {uid}"),
     }
 }
 
-fn infer_project(process: &ProcessSample, home: Option<&Path>) -> ProjectKey {
+fn format_uid(uid: u32, users: Option<&HashMap<u32, String>>) -> String {
+    users
+        .and_then(|users| users.get(&uid))
+        .map(|user| format!("{user} (uid {uid})"))
+        .unwrap_or_else(|| format!("uid {uid}"))
+}
+
+fn infer_project(
+    process: &ProcessSample,
+    home: Option<&Path>,
+    docker: &HashMap<String, DockerMetadata>,
+    users: Option<&HashMap<u32, String>>,
+) -> ProjectKey {
     if let Some(container_id) = process.container_id.as_deref() {
-        return container_key(container_id);
+        return container_key(container_id, docker.get(container_id), users);
     }
 
     if let Some(cwd) = process.cwd.as_deref()
@@ -318,11 +341,68 @@ fn key_from_app_bundle(root: &Path, home: Option<&Path>) -> ProjectKey {
     }
 }
 
-fn container_key(container_id: &str) -> ProjectKey {
-    ProjectKey {
-        name: format!("container {}", short_container_id(container_id)),
-        path: format!("container {container_id}"),
+fn container_key(
+    container_id: &str,
+    metadata: Option<&DockerMetadata>,
+    users: Option<&HashMap<u32, String>>,
+) -> ProjectKey {
+    let name = metadata
+        .map(|metadata| metadata.name.clone())
+        .unwrap_or_else(|| format!("container {}", short_container_id(container_id)));
+    let mut path = format!("container {container_id}");
+    if let Some(uid) = metadata.and_then(|metadata| metadata.launcher_uid) {
+        path.push_str(&format!("; launched by {}", format_uid(uid, users)));
     }
+
+    ProjectKey { name, path }
+}
+
+fn read_docker_metadata(processes: &[ProcessSample]) -> HashMap<String, DockerMetadata> {
+    let mut container_ids: Vec<&str> = processes
+        .iter()
+        .filter_map(|process| process.container_id.as_deref())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    if container_ids.is_empty() {
+        return HashMap::new();
+    }
+    container_ids.sort_unstable();
+
+    let Ok(output) = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            r#"{{.Id}}|{{.Name}}|{{with .Config.Labels}}{{index . "io.memtop.launcher.uid"}}{{end}}"#,
+        ])
+        .args(container_ids)
+        .output()
+    else {
+        return HashMap::new();
+    };
+
+    parse_docker_metadata(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_docker_metadata(output: &str) -> HashMap<String, DockerMetadata> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, '|');
+            let id = fields.next()?;
+            let name = fields.next()?.strip_prefix('/').unwrap_or_default();
+            let launcher_uid = fields.next()?.parse().ok();
+            (!id.is_empty() && !name.is_empty()).then(|| {
+                (
+                    id.to_string(),
+                    DockerMetadata {
+                        name: name.to_string(),
+                        launcher_uid,
+                    },
+                )
+            })
+        })
+        .collect()
 }
 
 fn short_container_id(container_id: &str) -> &str {
@@ -552,6 +632,31 @@ mod tests {
         );
         assert_eq!(projects[0].total_memory_kib, 3072);
         assert_eq!(projects[0].processes.len(), 2);
+    }
+
+    #[test]
+    fn parses_docker_name_and_launcher_uid() {
+        let id = "c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f";
+        let metadata = parse_docker_metadata(&format!(
+            "{id}|/research-bmt-triton_vad-1|1234\nignored|/without-label|<no value>\n"
+        ));
+
+        assert_eq!(
+            metadata.get(id),
+            Some(&DockerMetadata {
+                name: "research-bmt-triton_vad-1".to_string(),
+                launcher_uid: Some(1234),
+            })
+        );
+        assert_eq!(metadata["ignored"].launcher_uid, None);
+
+        let users = HashMap::from([(1234, "testuser".to_string())]);
+        let key = container_key(id, metadata.get(id), Some(&users));
+        assert_eq!(key.name, "research-bmt-triton_vad-1");
+        assert_eq!(
+            key.path,
+            format!("container {id}; launched by testuser (uid 1234)")
+        );
     }
 
     #[test]
