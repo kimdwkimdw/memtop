@@ -131,19 +131,20 @@ workspaces
 On macOS, processes from the same `/Applications/*.app`, `/System/Applications/*.app`, `/System/Library/CoreServices/*.app`, or `~/Applications/*.app` bundle are grouped together before repository fallback detection. That keeps apps such as Chrome and their helper processes under one app-level group.
 
 Container metadata takes precedence when a process is known to belong to a container.
-When the Docker CLI is available, Docker container IDs are resolved to container names.
+When the Docker CLI is available, Docker container IDs are resolved to container names
+and Docker Compose project/service metadata.
 Docker does not record the host user that launched a container, but `memtop` displays it
-when the container has an `io.memtop.launcher.uid` label:
+when the container has an optional `launcher.uid` label:
 
 ```yaml
 services:
   worker:
     labels:
-      io.memtop.launcher.uid: "${MEMTOP_LAUNCHER_UID:-}"
+      launcher.uid: "${LAUNCHER_UID:-}"
 ```
 
 ```bash
-MEMTOP_LAUNCHER_UID="$(id -u)" docker compose up -d
+LAUNCHER_UID="$(id -u)" docker compose up -d
 ```
 
 On Linux, `--group-by uid` groups processes by the real UID reported in `/proc/<pid>/status`. In the TUI, press `u` to toggle between project-aware grouping and UID grouping.

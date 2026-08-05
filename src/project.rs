@@ -77,6 +77,7 @@ struct ProjectKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DockerMetadata {
     name: String,
+    compose: Option<String>,
     launcher_uid: Option<u32>,
 }
 
@@ -349,7 +350,10 @@ fn container_key(
     let name = metadata
         .map(|metadata| metadata.name.clone())
         .unwrap_or_else(|| format!("container {}", short_container_id(container_id)));
-    let mut path = format!("container {container_id}");
+    let mut path = metadata
+        .and_then(|metadata| metadata.compose.as_ref())
+        .map(|compose| format!("compose {compose}; container {container_id}"))
+        .unwrap_or_else(|| format!("container {container_id}"));
     if let Some(uid) = metadata.and_then(|metadata| metadata.launcher_uid) {
         path.push_str(&format!("; launched by {}", format_uid(uid, users)));
     }
@@ -358,45 +362,54 @@ fn container_key(
 }
 
 fn read_docker_metadata(processes: &[ProcessSample]) -> HashMap<String, DockerMetadata> {
-    let mut container_ids: Vec<&str> = processes
+    let container_ids: HashSet<&str> = processes
         .iter()
         .filter_map(|process| process.container_id.as_deref())
-        .collect::<HashSet<_>>()
-        .into_iter()
         .collect();
     if container_ids.is_empty() {
         return HashMap::new();
     }
-    container_ids.sort_unstable();
 
     let Ok(output) = Command::new("docker")
         .args([
-            "inspect",
+            "ps",
+            "--no-trunc",
             "--format",
-            r#"{{.Id}}|{{.Name}}|{{with .Config.Labels}}{{index . "io.memtop.launcher.uid"}}{{end}}"#,
+            r#"{{.ID}}\t{{.Names}}\t{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}\t{{.Label "launcher.uid"}}\t{{.Label "io.memtop.launcher.uid"}}"#,
         ])
-        .args(container_ids)
         .output()
     else {
         return HashMap::new();
     };
 
-    parse_docker_metadata(&String::from_utf8_lossy(&output.stdout))
+    let mut metadata = parse_docker_metadata(&String::from_utf8_lossy(&output.stdout));
+    metadata.retain(|id, _| container_ids.contains(id.as_str()));
+    metadata
 }
 
 fn parse_docker_metadata(output: &str) -> HashMap<String, DockerMetadata> {
     output
         .lines()
         .filter_map(|line| {
-            let mut fields = line.splitn(3, '|');
+            let mut fields = line.splitn(6, '\t');
             let id = fields.next()?;
-            let name = fields.next()?.strip_prefix('/').unwrap_or_default();
-            let launcher_uid = fields.next()?.parse().ok();
+            let name = fields.next()?;
+            let name = name.strip_prefix('/').unwrap_or(name);
+            let project = fields.next()?;
+            let service = fields.next()?;
+            let launcher_uid = fields
+                .next()?
+                .parse()
+                .ok()
+                .or_else(|| fields.next()?.parse().ok());
+            let compose = (!project.is_empty() && !service.is_empty())
+                .then(|| format!("{project}/{service}"));
             (!id.is_empty() && !name.is_empty()).then(|| {
                 (
                     id.to_string(),
                     DockerMetadata {
                         name: name.to_string(),
+                        compose,
                         launcher_uid,
                     },
                 )
@@ -641,16 +654,18 @@ mod tests {
     fn parses_docker_name_and_launcher_uid() {
         let id = "c6e70a0867a1b7957698586b67fb03e411bd70d8e5c2b737c9cb08b951c31c6f";
         let metadata = parse_docker_metadata(&format!(
-            "{id}|/research-bmt-triton_vad-1|1234\nignored|/without-label|<no value>\n"
+            "{id}\tresearch-bmt-triton_vad-1\tresearch-bmt\ttriton_vad\t1234\t\nlegacy\tlegacy-worker\t\t\t\t5678\nignored\twithout-label\t\t\t\t\n"
         ));
 
         assert_eq!(
             metadata.get(id),
             Some(&DockerMetadata {
                 name: "research-bmt-triton_vad-1".to_string(),
+                compose: Some("research-bmt/triton_vad".to_string()),
                 launcher_uid: Some(1234),
             })
         );
+        assert_eq!(metadata["legacy"].launcher_uid, Some(5678));
         assert_eq!(metadata["ignored"].launcher_uid, None);
 
         let users = HashMap::from([(1234, "testuser".to_string())]);
@@ -658,7 +673,9 @@ mod tests {
         assert_eq!(key.name, "research-bmt-triton_vad-1");
         assert_eq!(
             key.path,
-            format!("container {id}; launched by testuser (uid 1234)")
+            format!(
+                "compose research-bmt/triton_vad; container {id}; launched by testuser (uid 1234)"
+            )
         );
     }
 
