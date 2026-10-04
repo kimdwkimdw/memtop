@@ -264,10 +264,14 @@ fn is_applications_bundle_path(path: &Path, home: Option<&Path>) -> bool {
 
 fn command_paths(process: &ProcessSample) -> impl Iterator<Item = PathBuf> + '_ {
     process.cmdline.iter().filter_map(|argument| {
-        let value = argument
-            .split_once('=')
-            .map(|(_, value)| value)
-            .unwrap_or(argument);
+        let value = if argument.starts_with('/') {
+            argument.as_str()
+        } else {
+            argument
+                .split_once('=')
+                .map(|(_, value)| value)
+                .unwrap_or(argument)
+        };
         value.starts_with('/').then(|| PathBuf::from(value))
     })
 }
@@ -518,6 +522,37 @@ const PROJECT_MARKERS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_paths_preserves_equals_in_absolute_paths() {
+        let process = ProcessSample {
+            pid: 10,
+            ppid: 1,
+            uid: None,
+            name: "python".to_string(),
+            cmdline: vec![
+                "/workspace/example/a=b.py".to_string(),
+                "--config=/workspace/another/c=d.toml".to_string(),
+                "--relative=a=b".to_string(),
+            ],
+            cwd: None,
+            exe: None,
+            container_id: None,
+            memory_kib: 2048,
+            memory_source: crate::procfs::MemoryMetric::Pss,
+        };
+
+        assert_eq!(
+            command_paths(&process).collect::<Vec<_>>(),
+            vec![
+                PathBuf::from("/workspace/example/a=b.py"),
+                PathBuf::from("/workspace/another/c=d.toml"),
+            ]
+        );
+        let project = infer_project(&process, None, &HashMap::new(), None);
+        assert_eq!(project.name, "example");
+        assert_eq!(project.path, "/workspace/example");
+    }
 
     #[test]
     fn finds_named_workspace_root() {
