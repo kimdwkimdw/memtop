@@ -228,7 +228,7 @@ Node.js to start `memtop`.
 
 ## Release
 
-GitHub Releases are built from version tags. The release workflow also publishes `@arthurkim/memtop` to npm, so the repository must have an `NPM_TOKEN` secret with publish access to that package.
+GitHub Releases are built from version tags. The release workflow publishes `@arthurkim/memtop` to npm using OIDC trusted publishing; no `NPM_TOKEN` secret is required. In the npm package settings, authorize GitHub Actions for `kimdwkimdw/memtop` with workflow filename `release.yml` and allow `npm publish`. The publishing job uses a GitHub-hosted runner, npm 11, and `id-token: write`. After verifying a successful publish, select the recommended publishing access setting that requires 2FA and disallows bypass-2FA tokens.
 
 ```bash
 VERSION="$(node -p "require('./package.json').version")"
