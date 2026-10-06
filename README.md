@@ -228,22 +228,4 @@ Node.js to start `memtop`.
 
 ## Release
 
-GitHub Releases are built from version tags. The release workflow publishes `@arthurkim/memtop` to npm using OIDC trusted publishing; no `NPM_TOKEN` secret is required. In the npm package settings, authorize GitHub Actions for `kimdwkimdw/memtop` with workflow filename `release.yml` and allow `npm publish`. The publishing job uses a GitHub-hosted runner, npm 11, and `id-token: write`. After verifying a successful publish, select the recommended publishing access setting that requires 2FA and disallows bypass-2FA tokens.
-
-```bash
-VERSION="$(node -p "require('./package.json').version")"
-git tag -a "v${VERSION}" -m "Release v${VERSION}"
-git push origin "v${VERSION}"
-```
-
-Pushing the tag starts the `release` workflow automatically. To rerun a release, run **Actions > release > Run workflow** and enter the existing tag.
-
-The workflow publishes:
-
-- `memtop-aarch64-apple-darwin.tar.gz`
-- `memtop-x86_64-apple-darwin.tar.gz`
-- `memtop-aarch64-unknown-linux-musl.tar.gz`
-- `memtop-x86_64-unknown-linux-musl.tar.gz`
-- npm package `@arthurkim/memtop`
-
-Linux archives are MUSL builds for broader distro compatibility. They are smoke-tested on the Ubuntu build runner and inside an Alpine container before upload. The npm package is also smoke-tested with `npm install -g` and `pnpm install -g` before it is published, with `node` blocked from the runtime `PATH`.
+Version tags (`v*`) automatically publish GitHub Releases and `@arthurkim/memtop` to npm via OIDC trusted publishing.
